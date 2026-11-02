@@ -99,7 +99,8 @@ public class MainActivity extends Activity {
 
         LinearLayout row3 = new LinearLayout(this);
         row3.setOrientation(LinearLayout.HORIZONTAL);
-        row3.addView(button("Scan camera", v -> scan()));
+        row3.addView(button("Find stream", v -> findStream()));
+        row3.addView(button("Scan ports", v -> scan()));
         row3.addView(button("Copy log", v -> copyLog()));
         row3.addView(button("Clear", v -> logView.setText("")));
         overlay.addView(row3);
@@ -219,6 +220,32 @@ public class MainActivity extends Activity {
             getSystemService(ConnectivityManager.class).bindProcessToNetwork(wifi);
             new CameraScanner(wifi, CAMERA_IP, this::log).run();
         }, "scan").start();
+    }
+
+    private void findStream() {
+        stopAll();
+        new Thread(() -> {
+            wifi = findWifi();
+            if (wifi == null) {
+                log("No Wi-Fi network found. Join the camera's Wi-Fi first.");
+                return;
+            }
+            getSystemService(ConnectivityManager.class).bindProcessToNetwork(wifi);
+            CameraScanner sc = new CameraScanner(wifi, CAMERA_IP, this::log);
+            java.util.List<String> found = sc.findRtspPaths(554);
+            sc.probeHttpPaths(8080);
+            if (!found.isEmpty()) {
+                String url = found.get(0);
+                log("Loading " + url + " (login skipped)...");
+                runOnUiThread(() -> {
+                    urlBox.setText(url);
+                    skipLoginBox.setChecked(true);
+                    prefs.edit().putString("url", url).apply();
+                    play(url, tcpBox.isChecked());
+                });
+            }
+            log("Done. Tap 'Copy log' and paste it to Claude if there's no picture.");
+        }, "find-stream").start();
     }
 
     private void copyLog() {
