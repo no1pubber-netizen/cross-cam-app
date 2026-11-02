@@ -97,10 +97,17 @@ public class MainActivity extends Activity {
         row2.addView(button("Hide", v -> setOverlayVisible(false)));
         overlay.addView(row2);
 
+        LinearLayout row3 = new LinearLayout(this);
+        row3.setOrientation(LinearLayout.HORIZONTAL);
+        row3.addView(button("Scan camera", v -> scan()));
+        row3.addView(button("Copy log", v -> copyLog()));
+        row3.addView(button("Clear", v -> logView.setText("")));
+        overlay.addView(row3);
+
         logView = new TextView(this);
         logView.setTextColor(0xFF9EFF9E);
         logView.setTextSize(11);
-        logView.setMaxLines(12);
+        logView.setMaxLines(22);
         logView.setVerticalScrollBarEnabled(true);
         logView.setMovementMethod(new ScrollingMovementMethod());
         overlay.addView(logView);
@@ -199,6 +206,25 @@ public class MainActivity extends Activity {
             }
             runOnUiThread(() -> play(url, tcp));
         }, "connect").start();
+    }
+
+    private void scan() {
+        stopAll();
+        new Thread(() -> {
+            wifi = findWifi();
+            if (wifi == null) {
+                log("No Wi-Fi network found. Join the camera's Wi-Fi first.");
+                return;
+            }
+            getSystemService(ConnectivityManager.class).bindProcessToNetwork(wifi);
+            new CameraScanner(wifi, CAMERA_IP, this::log).run();
+        }, "scan").start();
+    }
+
+    private void copyLog() {
+        android.content.ClipboardManager cb = getSystemService(android.content.ClipboardManager.class);
+        cb.setPrimaryClip(android.content.ClipData.newPlainText("CrossCam log", logView.getText()));
+        log("Log copied - paste it into the chat with Claude.");
     }
 
     private Network findWifi() {
