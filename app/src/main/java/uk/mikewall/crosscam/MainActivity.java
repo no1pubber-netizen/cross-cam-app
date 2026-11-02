@@ -38,6 +38,10 @@ public class MainActivity extends Activity {
     private static final String DEFAULT_URL = "rtsp://192.168.1.1/mjpg";
 
     private VLCVideoLayout videoLayout;
+    private android.widget.ImageView frameView;
+    private JieliSession jieli;
+    private volatile boolean decoding;
+    private CheckBox h264Box;
     private LinearLayout overlay;
     private EditText urlBox;
     private CheckBox tcpBox, skipLoginBox;
@@ -68,6 +72,13 @@ public class MainActivity extends Activity {
         root.addView(videoLayout, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        // JPEG frames from the JieLi UDP stream are drawn here, on top of the VLC view.
+        frameView = new android.widget.ImageView(this);
+        frameView.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+        frameView.setOnClickListener(v -> setOverlayVisible(true));
+        root.addView(frameView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         overlay = new LinearLayout(this);
         overlay.setOrientation(LinearLayout.VERTICAL);
         overlay.setBackgroundColor(0xAA000000);
@@ -87,12 +98,14 @@ public class MainActivity extends Activity {
         skipLoginBox = checkBox("Skip login", true);
         row1.addView(tcpBox);
         row1.addView(skipLoginBox);
+        h264Box = checkBox("H.264", false);
+        row1.addView(h264Box);
         overlay.addView(row1);
 
         LinearLayout row2 = new LinearLayout(this);
         row2.setOrientation(LinearLayout.HORIZONTAL);
-        row2.addView(button("Connect", v -> connect()));
-        row2.addView(button("Default", v -> urlBox.setText(DEFAULT_URL)));
+        row2.addView(button("Connect", v -> connectJieli()));
+        row2.addView(button("Play URL", v -> connect()));
         row2.addView(button("Stop", v -> stopAll()));
         row2.addView(button("Hide", v -> setOverlayVisible(false)));
         overlay.addView(row2);
@@ -172,6 +185,83 @@ public class MainActivity extends Activity {
     }
 
     // ---------------- Connection ----------------
+
+    /** JieLi chip cameras: CTP control on TCP 3333, video pushed to the phone over UDP. */
+    private void connectJieli() {
+        stopAll();
+        final boolean h264 = h264Box.isChecked();
+        new Thread(() -> {
+            wifi = findWifi();
+            if (wifi == null) {
+                log("No Wi-Fi network found. Join the camera's Wi-Fi first.");
+                return;
+            }
+            getSystemService(ConnectivityManager.class).bindProcessToNetwork(wifi);
+            log("Using Wi-Fi network for camera traffic");
+            // VLC listens for RTP video on UDP 6666 (one of the two ways JieLi cameras send it).
+            runOnUiThread(() -> playRtp6666(h264));
+            jieli = new JieliSession(wifi, CAMERA_IP, h264 ? 1 : 0, 0, 0, 0, !h264,
+                    new JieliSession.Listener() {
+                        @Override public void log(String msg) { MainActivity.this.log(msg); }
+                        @Override public void onJpeg(byte[] jpeg, int len) { showJpeg(jpeg, len); }
+                    });
+            jieli.start();
+            // Progress report after a few seconds
+            try { Thread.sleep(6000); } catch (InterruptedException ignored) { }
+            JieliSession j = jieli;
+            if (j != null) {
+                log("After 6s: UDP 2224 packets " + j.udpPackets + ", pictures " + j.udpFrames
+                        + (vlcShowing ? "; RTP 6666 video SHOWING" : "; nothing on RTP 6666 yet"));
+            }
+        }, "jieli-connect").start();
+    }
+
+    private volatile boolean vlcShowing;
+
+    private void showJpeg(byte[] jpeg, int len) {
+        if (decoding) return; // drop frames while the previous one is still being decoded
+        decoding = true;
+        final android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, len);
+        if (bmp == null) { decoding = false; return; }
+        runOnUiThread(() -> {
+            frameView.setImageBitmap(bmp);
+            decoding = false;
+        });
+    }
+
+    private void playRtp6666(boolean h264) {
+        try {
+            String sdp = "v=0\r\no=- 0 0 IN IP4 " + CAMERA_IP + "\r\ns=CrossCam\r\nc=IN IP4 0.0.0.0\r\nt=0 0\r\n"
+                    + (h264 ? "m=video " + JieliSession.RTP_PORT + " RTP/AVP 96\r\na=rtpmap:96 H264/90000\r\n"
+                            : "m=video " + JieliSession.RTP_PORT + " RTP/AVP 26\r\na=rtpmap:26 JPEG/90000\r\n");
+            java.io.File f = new java.io.File(getCacheDir(), "jieli.sdp");
+            java.io.FileOutputStream fo = new java.io.FileOutputStream(f);
+            fo.write(sdp.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            fo.close();
+            ArrayList<String> opts = new ArrayList<>();
+            opts.add("--network-caching=300");
+            opts.add("--no-audio");
+            libVlc = new LibVLC(this, opts);
+            player = new MediaPlayer(libVlc);
+            player.attachViews(videoLayout, null, false, false);
+            vlcShowing = false;
+            player.setEventListener(ev -> {
+                if (ev.type == MediaPlayer.Event.Vout && ev.getVoutCount() > 0) {
+                    vlcShowing = true;
+                    log("RTP 6666: video showing");
+                } else if (ev.type == MediaPlayer.Event.EncounteredError) {
+                    log("RTP 6666 player error");
+                }
+            });
+            Media media = new Media(libVlc, Uri.fromFile(f));
+            media.addOption(":network-caching=300");
+            player.setMedia(media);
+            media.release();
+            player.play();
+        } catch (Exception e) {
+            log("RTP player failed: " + e.getMessage());
+        }
+    }
 
     private void connect() {
         stopAll();
@@ -310,6 +400,8 @@ public class MainActivity extends Activity {
     }
 
     private void stopAll() {
+        if (jieli != null) { jieli.close(); jieli = null; }
+        if (frameView != null) runOnUiThread(() -> frameView.setImageDrawable(null));
         if (player != null) {
             try { player.stop(); player.detachViews(); player.release(); } catch (Exception ignored) { }
             player = null;
