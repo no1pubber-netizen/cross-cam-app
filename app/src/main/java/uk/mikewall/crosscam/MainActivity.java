@@ -75,7 +75,6 @@ public class MainActivity extends Activity {
         // JPEG frames from the JieLi UDP stream are drawn here, on top of the VLC view.
         frameView = new android.widget.ImageView(this);
         frameView.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
-        frameView.setOnClickListener(v -> setOverlayVisible(true));
         root.addView(frameView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -107,7 +106,6 @@ public class MainActivity extends Activity {
         row2.addView(button("Connect", v -> connectJieli()));
         row2.addView(button("Play URL", v -> connect()));
         row2.addView(button("Stop", v -> stopAll()));
-        row2.addView(button("Hide", v -> setOverlayVisible(false)));
         overlay.addView(row2);
 
         LinearLayout row3 = new LinearLayout(this);
@@ -136,22 +134,53 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP);
         root.addView(overlay, olp);
 
-        // Tap anywhere on the video to bring the controls back.
-        videoLayout.setOnClickListener(v -> setOverlayVisible(true));
-        root.setOnClickListener(v -> setOverlayVisible(true));
+        // Leave room on the right of the control panel for the menu button
+        overlay.setPadding(overlay.getPaddingLeft(), overlay.getPaddingTop(), dp(68), overlay.getPaddingBottom());
 
-        recButton = new TextView(this);
-        recButton.setText("● REC");
-        recButton.setTextColor(Color.WHITE);
-        recButton.setTextSize(18);
-        recButton.setGravity(Gravity.CENTER);
-        recButton.setPadding(dp(18), dp(10), dp(18), dp(10));
-        recButton.setBackground(roundBg(0x99000000));
-        recButton.setOnClickListener(v -> toggleRecording());
+        // ☰ Menu button (top right): shows/hides the controls and log
+        menuButton = new TextView(this);
+        menuButton.setText("☰");
+        menuButton.setTextColor(Color.WHITE);
+        menuButton.setTextSize(24);
+        menuButton.setGravity(Gravity.CENTER);
+        menuButton.setBackground(oval(0x88000000, Color.WHITE, 2));
+        menuButton.setOnClickListener(v -> setOverlayVisible(overlay.getVisibility() != View.VISIBLE));
+        FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(dp(52), dp(52), Gravity.TOP | Gravity.END);
+        mlp.setMargins(0, dp(12), dp(12), 0);
+        root.addView(menuButton, mlp);
+
+        // Big record button (bottom centre), camera-app style, with a timer above it
+        LinearLayout recBox = new LinearLayout(this);
+        recBox.setOrientation(LinearLayout.VERTICAL);
+        recBox.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        recTime = new TextView(this);
+        recTime.setTextColor(Color.WHITE);
+        recTime.setTextSize(16);
+        recTime.setPadding(dp(12), dp(4), dp(12), dp(4));
+        android.graphics.drawable.GradientDrawable pill = new android.graphics.drawable.GradientDrawable();
+        pill.setColor(0xFFD32F2F);
+        pill.setCornerRadius(dp(14));
+        recTime.setBackground(pill);
+        recTime.setVisibility(View.INVISIBLE);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tlp.bottomMargin = dp(8);
+        recBox.addView(recTime, tlp);
+
+        FrameLayout ring = new FrameLayout(this);
+        ring.setBackground(oval(0x33000000, Color.WHITE, 4));
+        recDot = new View(this);
+        setRecDot(false);
+        ring.addView(recDot, new FrameLayout.LayoutParams(dp(62), dp(62), Gravity.CENTER));
+        ring.setOnClickListener(v -> toggleRecording());
+        recBox.addView(ring, new LinearLayout.LayoutParams(dp(84), dp(84)));
+
         FrameLayout.LayoutParams rlp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.END);
-        rlp.setMargins(dp(16), dp(16), dp(16), dp(32));
-        root.addView(recButton, rlp);
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        rlp.bottomMargin = dp(36);
+        root.addView(recBox, rlp);
 
         root.setKeepScreenOn(true);
         setContentView(root);
@@ -250,13 +279,38 @@ public class MainActivity extends Activity {
         int q = prefs.getInt("quality", 1);
         return "Size: " + QUALITY_NAMES[q] + " (~" + QUALITY_MB_PER_MIN[q] + "MB/min)";
     }
-    private TextView recButton;
+    private TextView menuButton, recTime;
+    private View recDot;
+
+    /** Red circle when idle; smaller rounded red square while recording. */
+    private void setRecDot(boolean recording) {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setColor(0xFFE53935);
+        if (recording) {
+            g.setShape(android.graphics.drawable.GradientDrawable.RECTANGLE);
+            g.setCornerRadius(dp(6));
+        } else {
+            g.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        }
+        recDot.setBackground(g);
+        int size = dp(recording ? 30 : 62);
+        ViewGroup.LayoutParams lp = recDot.getLayoutParams();
+        if (lp != null) { lp.width = size; lp.height = size; recDot.setLayoutParams(lp); }
+    }
+
+    private android.graphics.drawable.GradientDrawable oval(int fill, int stroke, int strokeDp) {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        g.setColor(fill);
+        g.setStroke(dp(strokeDp), stroke);
+        return g;
+    }
     private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable recTick = new Runnable() {
         @Override public void run() {
             if (recorder != null && recorder.isActive()) {
                 long s = recorder.elapsedMs() / 1000;
-                recButton.setText(String.format(Locale.UK, "■ %d:%02d", s / 60, s % 60));
+                recTime.setText(String.format(Locale.UK, "● %d:%02d", s / 60, s % 60));
                 ui.postDelayed(this, 500);
             }
         }
@@ -271,7 +325,9 @@ public class MainActivity extends Activity {
             }
             recorder.bitrate = QUALITY_BITRATES[prefs.getInt("quality", 1)];
             recorder.start();
-            recButton.setBackground(roundBg(0xFFD32F2F));
+            setRecDot(true);
+            recTime.setText("● 0:00");
+            recTime.setVisibility(View.VISIBLE);
             ui.post(recTick);
             log("Recording started");
         } else {
@@ -282,8 +338,8 @@ public class MainActivity extends Activity {
     private void stopRecording() {
         if (recorder == null || !recorder.isActive()) return;
         ui.removeCallbacks(recTick);
-        recButton.setText("● REC");
-        recButton.setBackground(roundBg(0x99000000));
+        setRecDot(false);
+        recTime.setVisibility(View.INVISIBLE);
         final Recorder r = recorder;
         new Thread(() -> {
             String saved = r.stop();
@@ -312,10 +368,10 @@ public class MainActivity extends Activity {
             frameView.setImageBitmap(bmp);
             decoding = false;
             if (!autoHidden) {
-                // First picture: get the controls out of the way. Tap the picture to bring them back.
+                // First picture: get the controls out of the way. The ☰ button brings them back.
                 autoHidden = true;
                 setOverlayVisible(false);
-                android.widget.Toast.makeText(this, "Live. Tap the picture for controls.",
+                android.widget.Toast.makeText(this, "Live. Tap ☰ for the menu.",
                         android.widget.Toast.LENGTH_SHORT).show();
             }
         });
