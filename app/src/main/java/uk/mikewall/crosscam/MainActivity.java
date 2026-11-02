@@ -35,7 +35,7 @@ public class MainActivity extends Activity {
 
     private static final String CAMERA_IP = "192.168.1.1";
     private static final int PTP_PORT = 15740;
-    private static final String DEFAULT_URL = "rtsp://192.168.1.1/MJPG?W=640&H=360&Q=50&BR=3000000";
+    private static final String DEFAULT_URL = "rtsp://192.168.1.1/mjpg";
 
     private VLCVideoLayout videoLayout;
     private LinearLayout overlay;
@@ -78,13 +78,13 @@ public class MainActivity extends Activity {
         urlBox.setSingleLine(true);
         urlBox.setTextColor(Color.WHITE);
         urlBox.setTextSize(12);
-        urlBox.setText(prefs.getString("url", DEFAULT_URL));
+        urlBox.setText(prefs.getString("url2", DEFAULT_URL));
         overlay.addView(urlBox);
 
         LinearLayout row1 = new LinearLayout(this);
         row1.setOrientation(LinearLayout.HORIZONTAL);
         tcpBox = checkBox("RTSP over TCP", prefs.getBoolean("tcp", false));
-        skipLoginBox = checkBox("Skip login", false);
+        skipLoginBox = checkBox("Skip login", true);
         row1.addView(tcpBox);
         row1.addView(skipLoginBox);
         overlay.addView(row1);
@@ -92,7 +92,7 @@ public class MainActivity extends Activity {
         LinearLayout row2 = new LinearLayout(this);
         row2.setOrientation(LinearLayout.HORIZONTAL);
         row2.addView(button("Connect", v -> connect()));
-        row2.addView(button("720p", v -> urlBox.setText("rtsp://192.168.1.1/MJPG?W=1280&H=720&Q=50&BR=5000000")));
+        row2.addView(button("Default", v -> urlBox.setText(DEFAULT_URL)));
         row2.addView(button("Stop", v -> stopAll()));
         row2.addView(button("Hide", v -> setOverlayVisible(false)));
         overlay.addView(row2);
@@ -178,7 +178,7 @@ public class MainActivity extends Activity {
         String url = urlBox.getText().toString().trim();
         boolean tcp = tcpBox.isChecked();
         boolean skipLogin = skipLoginBox.isChecked();
-        prefs.edit().putString("url", url).putBoolean("tcp", tcp).apply();
+        prefs.edit().putString("url2", url).putBoolean("tcp", tcp).apply();
 
         new Thread(() -> {
             wifi = findWifi();
@@ -240,7 +240,7 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     urlBox.setText(url);
                     skipLoginBox.setChecked(true);
-                    prefs.edit().putString("url", url).apply();
+                    prefs.edit().putString("url2", url).apply();
                     play(url, tcpBox.isChecked());
                 });
             }

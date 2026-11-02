@@ -6,7 +6,7 @@ can no longer install iSmart DV.
 What it does:
 1. Logs in to the camera over PTP/IP (port 15740), the same as iSmart DV does.
 2. Plays the camera's live RTSP stream full screen with libVLC:
-   `rtsp://192.168.1.1/MJPG?W=640&H=360&Q=50&BR=3000000`
+   `rtsp://192.168.1.1/mjpg` (lower case; found by Aaron S. Jackson, aaronsplace.co.uk)
 
 ## Install
 Open the latest release on your phone:

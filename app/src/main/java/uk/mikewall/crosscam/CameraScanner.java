@@ -74,7 +74,7 @@ public class CameraScanner implements Runnable {
     }
 
     private static final String[] RTSP_PATHS = {
-            "", "live", "livestream", "live/ch0", "live/ch1", "liveview", "preview", "stream", "stream1", "stream2",
+            "mjpg", "", "live", "livestream", "live/ch0", "live/ch1", "liveview", "preview", "stream", "stream1", "stream2",
             "ch0", "ch1", "ch0_0.h264", "11", "12", "1", "0", "av0_0", "av0_1", "live.sdp", "live1.sdp",
             "H264", "h264", "MJPG", "mjpeg", "MJPEG", "xxx.mov", "video", "video1", "main", "sub",
             "media/stream1", "cam/realmonitor?channel=1&subtype=0", "unicast", "test", "camera", "jpeg",
