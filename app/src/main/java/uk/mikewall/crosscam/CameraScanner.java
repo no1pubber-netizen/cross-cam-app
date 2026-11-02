@@ -73,26 +73,90 @@ public class CameraScanner implements Runnable {
         log.log("[" + port + "] RTSP: " + (rtsp.isEmpty() ? "(no reply)" : rtsp));
     }
 
-    private static final String[] RTSP_PATHS = {
-            "mjpg", "", "live", "livestream", "live/ch0", "live/ch1", "liveview", "preview", "stream", "stream1", "stream2",
-            "ch0", "ch1", "ch0_0.h264", "11", "12", "1", "0", "av0_0", "av0_1", "live.sdp", "live1.sdp",
-            "H264", "h264", "MJPG", "mjpeg", "MJPEG", "xxx.mov", "video", "video1", "main", "sub",
-            "media/stream1", "cam/realmonitor?channel=1&subtype=0", "unicast", "test", "camera", "jpeg",
-            "MJPG?W=640&H=360&Q=50&BR=3000000", "H264?W=640&H=360&BR=3000000", "PSIA/streaming/channels/1",
-            "onvif1", "videoMain", "media/live/1/1", "tcp/av0_0"
-    };
+    private static final String[] RTSP_PATHS = buildPaths();
+
+    private static String[] buildPaths() {
+        java.util.LinkedHashSet<String> p = new java.util.LinkedHashSet<>();
+        String[] base = {
+                "mjpg", "", "live", "livestream", "live/ch0", "live/ch1", "liveview", "preview", "stream", "stream1", "stream2",
+                "ch0", "ch1", "ch0_0.h264", "11", "12", "1", "0", "2", "av0_0", "av0_1", "live.sdp", "live1.sdp",
+                "H264", "h264", "MJPG", "Mjpg", "mjpeg", "MJPEG", "xxx.mov", "video", "video1", "video0", "main", "sub",
+                "media/stream1", "cam/realmonitor?channel=1&subtype=0", "unicast", "test", "camera", "jpeg", "jpg",
+                "MJPG?W=640&H=360&Q=50&BR=3000000", "H264?W=640&H=360&BR=3000000", "PSIA/streaming/channels/1",
+                "onvif1", "onvif2", "videoMain", "videoSub", "media/live/1/1", "tcp/av0_0",
+                // HiSilicon / Linux-based action cams
+                "livestream/0", "livestream/1", "livestream/2", "livestream/11", "livestream/12",
+                "livestream/main", "livestream/sub", "live/0", "live/1", "live/main", "live/sub", "live/av0",
+                "live/stream", "live/mjpeg", "live/mjpg", "live/h264", "liveRTSP/av4", "liveRTSP/v1",
+                "stream0", "stream/0", "stream/1", "streaming/channels/1", "streaming/channels/101",
+                "Streaming/Channels/1", "Streaming/Channels/101", "h264/ch1/main/av_stream",
+                "ch01", "ch01.264", "ch1/main", "ch1/sub", "chn0", "chn1", "channel1", "channel=1",
+                "mpeg4", "MPEG4", "mpeg4/media.amp", "axis-media/media.amp", "media.amp", "media", "media/1",
+                "VideoInput/1/h264/1", "img/media.sav", "play1.sdp", "stream.sdp", "test.sdp", "h264.sdp",
+                "mjpeg.sdp", "video.sdp", "cam1", "cam0", "cam", "cam1/h264", "cam1/mjpeg", "rtsp", "rtsp_live0",
+                "live_mpeg4.sdp", "live_h264", "h264_stream", "mjpeg_stream", "sport", "sportdv", "dv",
+                "car", "dvr", "record", "rec", "now", "realtime", "real", "rt", "preview/0", "preview/1",
+                "previewStream", "PreviewStream", "LiveStream", "Live", "LIVE", "STREAM", "Stream",
+                "front", "rear", "tx", "wifi", "wificam", "app", "v1", "vs1", "av1", "av0", "0.sdp", "1.sdp",
+                "11.sdp", "user=admin_password=_channel=1_stream=0.sdp", "videostream", "mainstream", "substream"
+        };
+        Collections.addAll(p, base);
+        return p.toArray(new String[0]);
+    }
+
+    /** One RTSP request; reads only up to the end of the reply (fast). */
+    private String rtspRequest(int port, String request) {
+        try (Socket s = net.getSocketFactory().createSocket()) {
+            s.connect(new InetSocketAddress(host, port), 1500);
+            s.setSoTimeout(1500);
+            OutputStream o = s.getOutputStream();
+            o.write(request.getBytes(StandardCharsets.US_ASCII));
+            o.flush();
+            InputStream in = s.getInputStream();
+            java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+            int contentLen = -1, headerEnd = -1;
+            byte[] b = new byte[1024];
+            while (true) {
+                int n;
+                try { n = in.read(b); } catch (Exception e) { break; }
+                if (n <= 0) break;
+                buf.write(b, 0, n);
+                String sofar = buf.toString("ISO-8859-1");
+                if (headerEnd < 0) {
+                    headerEnd = sofar.indexOf("\r\n\r\n");
+                    if (headerEnd >= 0) {
+                        java.util.regex.Matcher m = java.util.regex.Pattern
+                                .compile("(?i)content-length:\\s*(\\d+)").matcher(sofar.substring(0, headerEnd));
+                        contentLen = m.find() ? Integer.parseInt(m.group(1)) : 0;
+                    }
+                }
+                if (headerEnd >= 0 && buf.size() >= headerEnd + 4 + contentLen) break;
+                if (buf.size() > 16000) break;
+            }
+            byte[] all = buf.toByteArray();
+            return printable(all, all.length);
+        } catch (Exception e) {
+            return "";
+        }
+    }
 
     /** Asks the RTSP server about each candidate path. Returns paths that answered 200 with an SDP. */
     public List<String> findRtspPaths(int port) {
         log.log("Asking RTSP server on port " + port + " about " + RTSP_PATHS.length + " stream names...");
         List<String> found = new ArrayList<>();
-        int cseq = 2;
+        int cseq = 2, notFound = 0;
+        boolean shownHeaders = false;
         for (String path : RTSP_PATHS) {
             String url = "rtsp://" + host + ":" + port + "/" + path;
-            String reply = exchange(port, "DESCRIBE " + url + " RTSP/1.0\r\nCSeq: " + (cseq++) +
-                    "\r\nAccept: application/sdp\r\nUser-Agent: CrossCam\r\n\r\n", 1000);
+            String reply = rtspRequest(port, "DESCRIBE " + url + " RTSP/1.0\r\nCSeq: " + (cseq++) +
+                    "\r\nAccept: application/sdp\r\nUser-Agent: LibVLC/3.0.20 (LIVE555 Streaming Media v2016.11.28)\r\n\r\n");
+            if (!shownHeaders && !reply.isEmpty()) {
+                log.log("Full reply to /" + path + ": " + reply);
+                shownHeaders = true;
+            }
             String status = reply.contains("|") ? reply.substring(0, reply.indexOf('|')).trim() : reply;
             if (status.isEmpty()) status = "(no reply)";
+            if (status.contains(" 404")) { notFound++; continue; }
             if (status.contains(" 200")) {
                 found.add(url);
                 log.log("FOUND /" + path + " -> " + status);
@@ -108,6 +172,7 @@ public class CameraScanner implements Runnable {
                 log.log("/" + path + " -> " + status);
             }
         }
+        log.log(notFound + " names answered 404 (not shown).");
         log.log(found.isEmpty() ? "No stream name matched." : "Working stream(s): " + found);
         return found;
     }
