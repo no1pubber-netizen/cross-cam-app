@@ -210,7 +210,8 @@ public class MainActivity extends Activity {
             try { Thread.sleep(6000); } catch (InterruptedException ignored) { }
             JieliSession j = jieli;
             if (j != null) {
-                log("After 6s: UDP 2224 packets " + j.udpPackets + ", pictures " + j.udpFrames
+                log("After 6s: TCP 2229 bytes " + j.tcpBytes + ", pictures " + j.tcpFrames
+                        + "; UDP 2224 packets " + j.udpPackets + ", pictures " + j.udpFrames
                         + (vlcShowing ? "; RTP 6666 video SHOWING" : "; nothing on RTP 6666 yet"));
             }
         }, "jieli-connect").start();

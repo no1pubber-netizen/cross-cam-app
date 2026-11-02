@@ -58,6 +58,13 @@ public class JieliSession implements Closeable {
     private int vpW = -1, vpH = -1, vpFps = -1;
     private int ctpLogged;
     volatile int udpPackets, udpFrames;
+    volatile long tcpBytes;
+    volatile int tcpFrames;
+    public static final int TCP_STREAM_PORT = 2229;
+    private Socket dataSock;
+    private Thread tcpThread;
+    private boolean dataOpened;
+    private volatile boolean dataConnected;
 
     public JieliSession(Network net, String host, int format, int w, int h, int fps,
                         boolean listen2224, Listener out) {
@@ -146,7 +153,11 @@ public class JieliSession implements Closeable {
                             new SimpleDateFormat("yyyyMMddHHmmss", Locale.UK).format(new Date())));
                     dateSent = true;
                 }
-                if (!streamRequested && (vpW > 0 || now - accessSentAt > 1500)) {
+                if (!dataOpened && (vpW > 0 || now - accessSentAt > 1500)) {
+                    dataOpened = true;
+                    startTcpStream();
+                }
+                if (!streamRequested && dateSent && dataOpened && (dataConnected || now - accessSentAt > 6000)) {
                     requestStream();
                 }
                 if (now - lastKeepAlive > keepAliveMs) {
@@ -232,6 +243,108 @@ public class JieliSession implements Closeable {
         return m.find() ? Integer.parseInt(m.group(1)) : -1;
     }
 
+    // ---------------- TCP 2229: real-time stream data socket ----------------
+
+    private void startTcpStream() {
+        tcpThread = new Thread(() -> {
+            try {
+                dataSock = net != null ? net.getSocketFactory().createSocket() : new Socket();
+                dataSock.setTcpNoDelay(true);
+                dataSock.setReceiveBufferSize(1 << 20);
+                dataSock.connect(new InetSocketAddress(host, TCP_STREAM_PORT), 4000);
+                dataSock.setSoTimeout(500);
+                out.log("JieLi: video data connection open (TCP " + TCP_STREAM_PORT + ")");
+                dataConnected = true;
+            } catch (IOException e) {
+                out.log("JieLi: video data connection failed: " + e.getMessage());
+                return;
+            }
+            Reassembler r = new Reassembler();
+            byte[] buf = new byte[256 * 1024];
+            int have = 0;
+            boolean dumped = false;
+            int unknownLogged = 0;
+            try {
+                InputStream in = dataSock.getInputStream();
+                while (running) {
+                    if (have == buf.length) {
+                        // Grow for large frames
+                        buf = java.util.Arrays.copyOf(buf, buf.length * 2);
+                    }
+                    int n;
+                    try {
+                        n = in.read(buf, have, buf.length - have);
+                    } catch (SocketTimeoutException e) {
+                        continue;
+                    }
+                    if (n < 0) { out.log("JieLi: camera closed the video connection"); break; }
+                    have += n;
+                    tcpBytes += n;
+                    if (!dumped && have >= 48) {
+                        dumped = true;
+                        out.log("TCP 2229 first bytes: " + hex(buf, 48));
+                    }
+                    // Parse as many complete pieces as are in the buffer
+                    int pos = 0;
+                    while (have - pos >= 20) {
+                        int type = buf[pos] & 0x7F;
+                        int plen = (buf[pos + 2] & 0xFF) | (buf[pos + 3] & 0xFF) << 8;
+                        int size = le32(buf, pos + 8);
+                        int at = le32(buf, pos + 12);
+                        if (type < 1 || type > 7 || size < 0 || size > (8 << 20)) {
+                            if (unknownLogged++ < 3) {
+                                out.log("TCP 2229: unexpected header at +" + pos + ": "
+                                        + hex(java.util.Arrays.copyOfRange(buf, pos, pos + 20), 20));
+                            }
+                            pos = resync(buf, pos + 1, have);
+                            continue;
+                        }
+                        // Piece length: the 16-bit field, or the whole frame when it doesn't fit
+                        int payload = plen;
+                        if (payload == 0 || (size > 0 && at + payload > size)) payload = size - at;
+                        if (payload < 0) payload = 0;
+                        if (pos + 20 + payload > buf.length) {
+                            buf = java.util.Arrays.copyOf(buf, Math.max(buf.length * 2, pos + 20 + payload + 1024));
+                        }
+                        if (have - pos < 20 + payload) break; // wait for the rest
+                        if (type == 2) {
+                            int len = r.pieceAt(buf, pos, payload);
+                            if (len > 0) {
+                                tcpFrames++;
+                                if (tcpFrames == 1) out.log("TCP 2229: first complete picture (" + len + " bytes)");
+                                out.onJpeg(r.ready, len);
+                            }
+                        } else if (type == 3 && tcpFrames == 0 && unknownLogged++ < 1) {
+                            out.log("TCP 2229: camera is sending H.264 (type 3); tick H.264 off/on and retry");
+                        }
+                        pos += 20 + payload;
+                    }
+                    if (pos > 0) {
+                        System.arraycopy(buf, pos, buf, 0, have - pos);
+                        have -= pos;
+                    }
+                }
+            } catch (IOException e) {
+                if (running) out.log("JieLi: video connection error: " + e.getMessage());
+            } finally {
+                try { dataSock.close(); } catch (IOException ignored) { }
+            }
+        }, "jieli-tcp");
+        tcpThread.start();
+    }
+
+    /** Finds the next plausible 20-byte header (type 1..3 and sane sizes). */
+    private static int resync(byte[] b, int from, int have) {
+        for (int i = from; i + 20 <= have; i++) {
+            int t = b[i] & 0x7F;
+            if (t >= 1 && t <= 3) {
+                int size = le32(b, i + 8), at = le32(b, i + 12);
+                if (size > 0 && size < (8 << 20) && at >= 0 && at < size) return i;
+            }
+        }
+        return Math.max(from, have - 19);
+    }
+
     // ---------------- UDP 2224: camera's own JPEG stream ----------------
 
     private void startUdp() {
@@ -308,6 +421,8 @@ public class JieliSession implements Closeable {
             return done;
         }
 
+        int pieceAt(byte[] b, int off, int plen) { return piece(b, off, plen); }
+
         private int piece(byte[] b, int off, int plen) {
             if ((b[off] & 0x7F) != 2) return 0;
             int size = le32(b, off + 8);
@@ -348,5 +463,6 @@ public class JieliSession implements Closeable {
             try { if (sock != null) sock.close(); } catch (IOException ignored) { }
         }, "jieli-close").start();
         if (udp != null) udp.close();
+        try { if (dataSock != null) dataSock.close(); } catch (IOException ignored) { }
     }
 }
