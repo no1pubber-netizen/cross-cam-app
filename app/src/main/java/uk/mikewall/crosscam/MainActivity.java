@@ -116,6 +116,12 @@ public class MainActivity extends Activity {
         row3.addView(button("Scan ports", v -> scan()));
         row3.addView(button("Copy log", v -> copyLog()));
         row3.addView(button("Clear", v -> logView.setText("")));
+        sizeButton = button(sizeLabel(), v -> {
+            int q = (prefs.getInt("quality", 1) + 1) % QUALITY_NAMES.length;
+            prefs.edit().putInt("quality", q).apply();
+            sizeButton.setText(sizeLabel());
+        });
+        row3.addView(sizeButton);
         overlay.addView(row3);
 
         logView = new TextView(this);
@@ -235,6 +241,15 @@ public class MainActivity extends Activity {
     private volatile boolean vlcShowing;
     private volatile boolean autoHidden;
     private Recorder recorder;
+    private Button sizeButton;
+    private static final String[] QUALITY_NAMES = {"High", "Medium", "Small"};
+    private static final int[] QUALITY_BITRATES = {6_000_000, 3_000_000, 1_500_000};
+    private static final int[] QUALITY_MB_PER_MIN = {45, 22, 11};
+
+    private String sizeLabel() {
+        int q = prefs.getInt("quality", 1);
+        return "Size: " + QUALITY_NAMES[q] + " (~" + QUALITY_MB_PER_MIN[q] + "MB/min)";
+    }
     private TextView recButton;
     private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable recTick = new Runnable() {
@@ -254,6 +269,7 @@ public class MainActivity extends Activity {
                 android.widget.Toast.makeText(this, "Tap Connect first", android.widget.Toast.LENGTH_SHORT).show();
                 return;
             }
+            recorder.bitrate = QUALITY_BITRATES[prefs.getInt("quality", 1)];
             recorder.start();
             recButton.setBackground(roundBg(0xFFD32F2F));
             ui.post(recTick);

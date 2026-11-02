@@ -50,6 +50,8 @@ public class Recorder {
     private long startedAt;
     private int framesIn;
     public volatile String savedName;
+    /** Target bitrate in bits per second, set before start(). */
+    public volatile int bitrate = 3_000_000;
 
     public Recorder(Context ctx, Logger log) {
         this.ctx = ctx;
@@ -97,7 +99,9 @@ public class Recorder {
         height = h & ~1;
         MediaFormat f = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
         f.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-        f.setInteger(MediaFormat.KEY_BIT_RATE, width * height >= 1280 * 720 ? 8_000_000 : 4_000_000);
+        // Scale the chosen bitrate for pictures smaller than 720p
+        int br = width * height >= 1280 * 720 ? bitrate : Math.max(500_000, bitrate / 2);
+        f.setInteger(MediaFormat.KEY_BIT_RATE, br);
         f.setInteger(MediaFormat.KEY_FRAME_RATE, 25);
         f.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
         encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
@@ -131,7 +135,7 @@ public class Recorder {
         final MediaMuxer mux = muxer;
         drainThread = new Thread(() -> drain(enc, mux), "rec-drain");
         drainThread.start();
-        log.log("Recording " + width + "x" + height + " to " + savedName);
+        log.log("Recording " + width + "x" + height + " at " + (br / 100_000) / 10.0 + " Mbps to " + savedName);
     }
 
     private void drain(MediaCodec enc, MediaMuxer mux) {
