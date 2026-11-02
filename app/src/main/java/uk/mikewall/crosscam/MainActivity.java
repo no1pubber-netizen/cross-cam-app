@@ -189,6 +189,7 @@ public class MainActivity extends Activity {
     /** JieLi chip cameras: CTP control on TCP 3333, video pushed to the phone over UDP. */
     private void connectJieli() {
         stopAll();
+        autoHidden = false;
         final boolean h264 = h264Box.isChecked();
         new Thread(() -> {
             wifi = findWifi();
@@ -218,6 +219,7 @@ public class MainActivity extends Activity {
     }
 
     private volatile boolean vlcShowing;
+    private volatile boolean autoHidden;
 
     private void showJpeg(byte[] jpeg, int len) {
         if (decoding) return; // drop frames while the previous one is still being decoded
@@ -227,6 +229,13 @@ public class MainActivity extends Activity {
         runOnUiThread(() -> {
             frameView.setImageBitmap(bmp);
             decoding = false;
+            if (!autoHidden) {
+                // First picture: get the controls out of the way. Tap the picture to bring them back.
+                autoHidden = true;
+                setOverlayVisible(false);
+                android.widget.Toast.makeText(this, "Live. Tap the picture for controls.",
+                        android.widget.Toast.LENGTH_SHORT).show();
+            }
         });
     }
 
