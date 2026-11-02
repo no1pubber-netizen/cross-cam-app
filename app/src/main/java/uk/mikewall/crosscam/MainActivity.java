@@ -134,6 +134,20 @@ public class MainActivity extends Activity {
         videoLayout.setOnClickListener(v -> setOverlayVisible(true));
         root.setOnClickListener(v -> setOverlayVisible(true));
 
+        recButton = new TextView(this);
+        recButton.setText("● REC");
+        recButton.setTextColor(Color.WHITE);
+        recButton.setTextSize(18);
+        recButton.setGravity(Gravity.CENTER);
+        recButton.setPadding(dp(18), dp(10), dp(18), dp(10));
+        recButton.setBackground(roundBg(0x99000000));
+        recButton.setOnClickListener(v -> toggleRecording());
+        FrameLayout.LayoutParams rlp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.END);
+        rlp.setMargins(dp(16), dp(16), dp(16), dp(32));
+        root.addView(recButton, rlp);
+
+        root.setKeepScreenOn(true);
         setContentView(root);
     }
 
@@ -220,12 +234,64 @@ public class MainActivity extends Activity {
 
     private volatile boolean vlcShowing;
     private volatile boolean autoHidden;
+    private Recorder recorder;
+    private TextView recButton;
+    private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable recTick = new Runnable() {
+        @Override public void run() {
+            if (recorder != null && recorder.isActive()) {
+                long s = recorder.elapsedMs() / 1000;
+                recButton.setText(String.format(Locale.UK, "■ %d:%02d", s / 60, s % 60));
+                ui.postDelayed(this, 500);
+            }
+        }
+    };
+
+    private void toggleRecording() {
+        if (recorder == null) recorder = new Recorder(this, this::log);
+        if (!recorder.isActive()) {
+            if (jieli == null) {
+                android.widget.Toast.makeText(this, "Tap Connect first", android.widget.Toast.LENGTH_SHORT).show();
+                return;
+            }
+            recorder.start();
+            recButton.setBackground(roundBg(0xFFD32F2F));
+            ui.post(recTick);
+            log("Recording started");
+        } else {
+            stopRecording();
+        }
+    }
+
+    private void stopRecording() {
+        if (recorder == null || !recorder.isActive()) return;
+        ui.removeCallbacks(recTick);
+        recButton.setText("● REC");
+        recButton.setBackground(roundBg(0x99000000));
+        final Recorder r = recorder;
+        new Thread(() -> {
+            String saved = r.stop();
+            runOnUiThread(() -> android.widget.Toast.makeText(this,
+                    saved != null ? "Saved to " + saved : "Nothing saved", android.widget.Toast.LENGTH_LONG).show());
+        }, "rec-stop").start();
+    }
+
+    private android.graphics.drawable.GradientDrawable roundBg(int color) {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(dp(28));
+        g.setStroke(dp(2), Color.WHITE);
+        return g;
+    }
 
     private void showJpeg(byte[] jpeg, int len) {
-        if (decoding) return; // drop frames while the previous one is still being decoded
-        decoding = true;
+        boolean rec = recorder != null && recorder.isActive();
+        if (decoding && !rec) return; // not recording: skip frames while the screen is still busy
         final android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, len);
-        if (bmp == null) { decoding = false; return; }
+        if (bmp == null) return;
+        if (rec) recorder.onFrame(bmp);
+        if (decoding) return; // screen still drawing the previous picture
+        decoding = true;
         runOnUiThread(() -> {
             frameView.setImageBitmap(bmp);
             decoding = false;
@@ -410,6 +476,7 @@ public class MainActivity extends Activity {
     }
 
     private void stopAll() {
+        stopRecording();
         if (jieli != null) { jieli.close(); jieli = null; }
         if (frameView != null) runOnUiThread(() -> frameView.setImageDrawable(null));
         if (player != null) {
